@@ -70,6 +70,14 @@ export function formatDateTimeRange(startIso, endIso) {
   return `${formatTimeHM(start)} - ${formatTimeHM(end)} น. (${hours} ชม.)`;
 }
 
+/** เบอร์โทรตัวเลขล้วน → มีขีดอ่านง่าย: 10 หลัก "081-234-5678" / 9 หลัก "02-123-4567" (รูปแบบอื่นคืนค่าเดิม) */
+export function formatPhone(phone) {
+  const digits = String(phone || '');
+  if (/^\d{10}$/.test(digits)) return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
+  if (/^\d{9}$/.test(digits)) return `${digits.slice(0, 2)}-${digits.slice(2, 5)}-${digits.slice(5)}`;
+  return digits;
+}
+
 /** แปลงตัวเลขเป็นรูปแบบเงินไทย มีจุลภาค เช่น 1500 → "1,500" */
 export function money(n) {
   return Number(n || 0).toLocaleString('th-TH');
@@ -133,6 +141,11 @@ function bangkokParts(epochMs) {
 
 function bangkokNowParts() {
   return bangkokParts(Date.now());
+}
+
+/** วันที่ "YYYY-MM-DD" ตามเวลาไทย ย้อนหลัง count วัน (วันนี้ก่อน) เช่น count = 7 → [วันนี้, เมื่อวาน, ...] */
+export function recentBangkokDates(count) {
+  return Array.from({ length: count }, (_, i) => bangkokParts(Date.now() - i * 24 * 60 * 60 * 1000).dateISO);
 }
 
 /**
