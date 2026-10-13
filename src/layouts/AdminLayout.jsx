@@ -5,7 +5,7 @@ import NavItem from '../components/NavItem.jsx';
 import Avatar from '../components/Avatar.jsx';
 import IconButton from '../components/IconButton.jsx';
 import api from '../api/client.js';
-import AdminSlipToasts, { playAlertSound } from '../components/AdminSlipToasts.jsx';
+import AdminSlipToasts from '../components/AdminSlipToasts.jsx';
 import {
   Menu,
   ClipboardCheck,
@@ -17,17 +17,15 @@ import {
   LogOut,
   Plus,
   X,
-  Volume2,
-  VolumeX,
 } from '../components/Icons.jsx';
 
-// แจ้งเตือนแอดมิน: เช็คสลิปใหม่ทุก 15 วินาที / เก็บค่าเปิด-ปิดเสียงไว้ใน localStorage
+// แจ้งเตือนแอดมิน: เช็คสลิปใหม่ทุก 15 วินาที
 const ALERT_POLL_MS = 15000;
 const MAX_TOASTS = 5;
-const SOUND_KEY = 'gens_karaoke_admin_sound';
 // จำกล่องแจ้งเตือน + เลขสลิปล่าสุดไว้ในแท็บนี้ (sessionStorage = หายเมื่อปิดแท็บ) — กดรีเฟรชแล้วกล่องไม่หาย และไม่เด้งซ้ำ
 const ALERTS_KEY = 'gens_karaoke_admin_alerts';
 
+// อ่านกล่องแจ้งเตือนที่จำไว้ใน sessionStorage (ไม่มี/ข้อมูลเสีย = เริ่มจากว่าง)
 function loadSavedAlerts() {
   try {
     const saved = JSON.parse(sessionStorage.getItem(ALERTS_KEY));
@@ -53,10 +51,10 @@ const PAGE_TITLES = {
  * "โครง" ของทุกหน้าแอดมิน:
  * 1. ยังไม่ล็อกอิน → พาไปหน้าล็อกอินแอดมิน
  * 2. เมนูด้านซ้าย: บนคอมย่อ/ขยายได้ / บนมือถือเป็นเมนูเลื่อนออกมา
- * 3. แถบด้านบน: ชื่อหน้าปัจจุบัน + ปุ่มเปิด/ปิดเสียงแจ้งเตือน + ปุ่มออกจากระบบ
+ * 3. แถบด้านบน: ชื่อหน้าปัจจุบัน + ปุ่มออกจากระบบ
  * 4. ตรงกลาง <Outlet />: เนื้อหาของหน้าที่เปิดอยู่
  * 5. แจ้งเตือน: ถาม backend ทุก 15 วินาที → อัปเดตตัวเลขแดงบนเมนูและบนแท็บเบราว์เซอร์
- *    ถ้ามีสลิปใหม่ → เด้งกล่องแจ้งเตือนมุมขวาล่าง + มีเสียง
+ *    ถ้ามีสลิปใหม่ → เด้งกล่องแจ้งเตือนมุมขวาล่าง
  */
 export default function AdminLayout() {
   const { admin, logoutAdmin } = useAuth();
@@ -69,6 +67,7 @@ export default function AdminLayout() {
 
   // จำนวนรายการรอจัดการ (รอยืนยันวันนี้ + ค้างจากวันก่อน) — ตัวเลขแดงบนเมนู "อนุมัติการจอง"
   const [pendingCount, setPendingCount] = useState(0);
+  // หน้าอนุมัติการจองเรียกฟังก์ชันนี้หลังโหลดรายการ (ส่งผ่าน Outlet context) ให้ตัวเลขแดงตรงกับรายการล่าสุด
   const updateBadgeFromStats = (stats) => {
     setPendingCount(Number(stats?.pending_count || 0) + Number(stats?.overdue_count || 0));
   };
@@ -78,20 +77,13 @@ export default function AdminLayout() {
   const [savedAlerts] = useState(loadSavedAlerts);
   const [slipToasts, setSlipToasts] = useState(savedAlerts.toasts);
   const [alertsVersion, setAlertsVersion] = useState(0);
-  const [soundOn, setSoundOn] = useState(() => {
-    try {
-      return localStorage.getItem(SOUND_KEY) !== 'off';
-    } catch {
-      return true;
-    }
-  });
-  const soundOnRef = useRef(soundOn);
-  soundOnRef.current = soundOn;
   // เลขสลิปล่าสุดที่เห็นแล้ว — null = ยังไม่เคยถาม (ครั้งแรกแค่จำเลขไว้ ไม่เด้งสลิปเก่าที่ค้างอยู่ก่อนเปิดหน้า)
   const lastPaymentIdRef = useRef(savedAlerts.lastPaymentId);
 
+  // ref เก็บกล่องแจ้งเตือนล่าสุด ให้ saveAlerts อ่านค่าปัจจุบันได้เสมอ (แม้ถูกเรียกจาก checkAlerts ที่สร้างไว้ครั้งเดียว)
   const slipToastsRef = useRef(slipToasts);
   slipToastsRef.current = slipToasts;
+  // บันทึกกล่องแจ้งเตือน + เลขสลิปล่าสุดลง sessionStorage — เรียกทุกครั้งที่กล่องเปลี่ยน และหลังเช็คสลิปใหม่
   const saveAlerts = () => {
     try {
       sessionStorage.setItem(
@@ -104,6 +96,9 @@ export default function AdminLayout() {
   };
   useEffect(saveAlerts, [slipToasts]);
 
+  // ถาม backend ว่ามีสลิปใหม่หลังเลขล่าสุดที่เคยเห็นไหม → อัปเดตตัวเลขแดง
+  // มีสลิปใหม่ → เพิ่มกล่องแจ้งเตือน (เก็บแค่ 5 กล่องล่าสุด) + เพิ่ม alertsVersion ให้หน้าอนุมัติการจองโหลดใหม่
+  // ครั้งแรก (first) แค่จำเลขล่าสุดไว้ ไม่เด้งสลิปที่ค้างอยู่ก่อนเปิดหน้า
   const checkAlerts = useCallback(() => {
     const first = lastPaymentIdRef.current === null;
     return api
@@ -113,7 +108,6 @@ export default function AdminLayout() {
         if (!first && a.newSlips.length) {
           setSlipToasts((list) => [...list, ...a.newSlips].slice(-MAX_TOASTS));
           setAlertsVersion((v) => v + 1);
-          if (soundOnRef.current) playAlertSound();
         }
         lastPaymentIdRef.current = Math.max(a.latestPaymentId, lastPaymentIdRef.current ?? 0);
         saveAlerts();
@@ -137,6 +131,7 @@ export default function AdminLayout() {
   useEffect(() => {
     document.title = pendingCount ? `(${pendingCount}) ${baseTitleRef.current}` : baseTitleRef.current;
   }, [pendingCount]);
+  // ออกจากหน้าแอดมิน → คืนชื่อแท็บเดิม (ไม่มีตัวเลขค้าง)
   useEffect(() => () => (document.title = baseTitleRef.current), []);
 
   // ออกจากระบบ = ล้างแจ้งเตือนที่จำไว้ด้วย (คนถัดไปที่ล็อกอินในแท็บนี้จะไม่เห็นของเก่า)
@@ -148,17 +143,6 @@ export default function AdminLayout() {
     }
     document.title = baseTitleRef.current; // เอาตัวเลขออกจากชื่อแท็บทันที
     logoutAdmin();
-  };
-
-  const toggleSound = () => {
-    const next = !soundOn;
-    setSoundOn(next);
-    try {
-      localStorage.setItem(SOUND_KEY, next ? 'on' : 'off');
-    } catch {
-      /* เก็บค่าไม่ได้ก็ใช้แค่รอบนี้ */
-    }
-    if (next) playAlertSound(); // เปิดเสียงแล้วเล่นให้ฟังหนึ่งครั้ง
   };
 
   // บนมือถือ: เปลี่ยนหน้าแล้วปิดเมนูให้อัตโนมัติ
@@ -177,6 +161,7 @@ export default function AdminLayout() {
     setMobileOpen(false);
   };
 
+  // เมนูไหนตรงกับหน้าที่เปิดอยู่ → ไฮไลต์
   const isActive = (path) => location.pathname === path;
   const title = PAGE_TITLES[location.pathname] || 'อนุมัติการจอง';
 
@@ -285,10 +270,6 @@ export default function AdminLayout() {
           </IconButton>
           <h1>{title}</h1>
           <div className="admin-header-actions">
-            {/* เปิด/ปิดเสียงแจ้งเตือนสลิปใหม่ */}
-            <IconButton label={soundOn ? 'ปิดเสียงแจ้งเตือน' : 'เปิดเสียงแจ้งเตือน'} onClick={toggleSound}>
-              {soundOn ? <Volume2 /> : <VolumeX />}
-            </IconButton>
             {/* ปุ่มออกจากระบบ (โชว์ชื่อแอดมินที่ล็อกอินอยู่) */}
             <button type="button" className="user-pill" onClick={handleLogout} title="ออกจากระบบ">
               <Avatar name={admin.name || admin.username} size="sm" />

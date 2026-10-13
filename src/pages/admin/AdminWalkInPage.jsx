@@ -76,8 +76,10 @@ export default function AdminWalkInPage() {
     return buildHalfHourSlots(Number(todayHours.open_hour ?? 0), Number(todayHours.close_hour ?? 24));
   }, [todayHours]);
 
+  // เวลาจบที่เป็นไปได้ = ทุกช่อง + 30 นาที
   const endOptions = useMemo(() => slotTimes.map((t) => addMinutesToTime(t, 30)), [slotTimes]);
 
+  // ช่องที่เวลาผ่านไปแล้ว (เลือกเป็นเวลาเริ่มไม่ได้)
   const lockedStartTimes = useMemo(
     () => new Set(slotTimes.filter((t) => isSlotPastBangkok(todayISODate(), t))),
     [slotTimes, nowTick], // eslint-disable-line react-hooks/exhaustive-deps -- nowTick: บังคับคำนวณใหม่ทุก 30 วิ ตามเวลาจริง
@@ -98,6 +100,8 @@ export default function AdminWalkInPage() {
     setEnd('');
   }, [roomId]);
 
+  // ลำดับช่อง + เช็กว่าช่องอยู่ในช่วงที่เลือก (หลักการเดียวกับ BookingPage)
+  // ⚠️ ต่างกันตรงที่ end ในหน้านี้ = เวลาจบจริง จึงต้องลบ 30 นาทีก่อนถึงจะได้ช่องสุดท้าย
   const order = useMemo(() => new Map(slotTimes.map((t, i) => [t, i])), [slotTimes]);
   const startOrder = start ? order.get(start) : null;
   const selectedEndSlot = end ? addMinutesToTime(end, -30) : null;
@@ -127,6 +131,8 @@ export default function AdminWalkInPage() {
     setEnd(addMinutesToTime(t, WALKIN_MIN_SLOTS * 30));
   };
 
+  // กดช่องเวลา: ยังไม่เลือก → เลือกขั้นต่ำ 1 ชม. จากช่องนี้ / กดช่องเริ่มซ้ำ → ยกเลิก
+  // กดช่องหลังช่วงขั้นต่ำ → ขยายช่วงถึงช่องนั้น (ระหว่างทางติดช่องจองแล้ว/ผ่านไปแล้ว → เริ่มใหม่ที่ช่องนั้น)
   const selectSlot = (time, disabled) => {
     if (disabled) return;
     setFormError('');
@@ -196,7 +202,7 @@ export default function AdminWalkInPage() {
   }, [rooms, bookings, slotTimes, lockedStartTimes]);
 
   // สถานะห้อง ณ เวลานี้จริงๆ (ไม่ผูกกับช่วงเวลาที่เลือกในฟอร์ม) — ใช้กับการ์ดสรุปด้านบนสุด
-  // เขียว = ว่างตอนนี้ / ส้ม = ไม่ว่างตอนนี้แต่ยังมีช่วงว่างเหลือวันนี้ / แดง = จองเต็มวัน ไม่มีช่วงว่างเหลือแล้ว
+  // เขียว = ว่างตลอดที่เหลือของวัน / เหลือง = ว่างเป็นช่วง (มีการจองอยู่ แต่ยังมีช่วงว่างเหลือ) / แดง = จองเต็มวัน
   const roomCurrentStatus = useMemo(() => {
     const now = new Date();
     const map = new Map();
@@ -213,11 +219,14 @@ export default function AdminWalkInPage() {
       const next = roomBookings
         .filter((b) => new Date(b.start_datetime) > now)
         .sort((a, b) => new Date(a.start_datetime) - new Date(b.start_datetime))[0];
-      map.set(r.room_id, { busy: false, fullyBooked: false, nextStart: next ? next.start_datetime : null });
+      // ตอนนี้ยังไม่มีคนใช้ห้อง แต่ช่องที่เหลือของวันอาจถูกจองหมดแล้ว (เช่น จองไว้ตั้งแต่ช่องถัดไปจนร้านปิด) → ยังนับเป็นจองเต็มวัน
+      map.set(r.room_id, { busy: false, fullyBooked, nextStart: next ? next.start_datetime : null });
     });
     return map;
   }, [rooms, bookings, roomDaySchedule, nowTick]); // eslint-disable-line react-hooks/exhaustive-deps -- nowTick: บังคับคำนวณใหม่ทุก 30 วิ ตามเวลาจริง
 
+  // เพิ่มการจองวอล์คอิน — ตรวจในหน้าเว็บก่อน (ห้อง เวลา ขั้นต่ำ 1 ชม. ห้องว่าง) แล้วส่งไปบันทึก
+  // backend บันทึกเป็น confirmed + มัดจำ paid ทันที เพราะลูกค้าจ่ายที่หน้าร้าน
   const submit = async () => {
     setSuccessMsg('');
     if (!roomId) {
@@ -232,6 +241,7 @@ export default function AdminWalkInPage() {
       setFormError('เวลาที่เลือกผ่านไปแล้ว กรุณาเลือกเวลาใหม่');
       return;
     }
+    // ระยะเวลาเป็นนาที รองรับข้ามเที่ยงคืน (1440 = นาทีใน 1 วัน) เช่น 23:00–00:00 → 60 นาที
     const durationMinutes = (((timeToMinutes(end) - timeToMinutes(start)) % 1440) + 1440) % 1440 || 1440;
     if (durationMinutes < WALKIN_MIN_SLOTS * 30) {
       setFormError('วอล์คอินต้องจองอย่างน้อย 1 ชั่วโมง');
@@ -273,13 +283,21 @@ export default function AdminWalkInPage() {
           {rooms.map((r) => {
             const status = roomCurrentStatus.get(r.room_id) || {};
             const { busy: isBusy, fullyBooked } = status;
-            const tone = fullyBooked ? 'red' : isBusy ? 'amber' : 'green';
+            // ว่างเป็นช่วง = ยังไม่เต็มวัน แต่มีการจองอยู่ (ใช้ห้องอยู่ตอนนี้ หรือมีคนจองช่วงหลังจากนี้)
+            const partlyFree = !fullyBooked && (isBusy || Boolean(status.nextStart));
+            const tone = fullyBooked ? 'red' : partlyFree ? 'amber' : 'green';
             const palette = {
               red: { bg: 'var(--red-50)', border: 'var(--red-500)', text: 'var(--red-600)' },
               amber: { bg: 'var(--amber-50)', border: 'var(--amber-400)', text: 'var(--amber-600)' },
               green: { bg: 'var(--green-50)', border: 'var(--green-500)', text: 'var(--green-700)' },
             }[tone];
-            const label = fullyBooked ? 'จองเต็มวัน' : isBusy ? 'ไม่ว่างตอนนี้' : 'ว่างตอนนี้';
+            const label = fullyBooked
+              ? 'จองเต็มวัน'
+              : isBusy
+                ? 'ไม่ว่างตอนนี้'
+                : partlyFree
+                  ? 'ว่างเป็นช่วง'
+                  : 'ว่างตลอดวัน';
             const detail = fullyBooked
               ? 'ไม่มีช่วงว่างเหลือวันนี้'
               : isBusy
